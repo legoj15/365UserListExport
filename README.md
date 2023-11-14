@@ -1,6 +1,10 @@
 # 365UserListExport
 Exports a list of all mailboxes associated with a Microsoft 365 admin account, including assigned licenses, mailbox forwarding recipients, and MFA status, to an xlsx format Excel spreadsheet
 
+The python script ensures that you don't need to fiddle with the ExecutionPolicy settings on the machine you intend to use the script on, and is entirely optional, but also 100% independent (the data of the .ps1 file is also in the .py file)
+
+If you don't have the required PowerShell modules, the ps1 script will install them for you. This means you may need to run the Python or PowerShell script as administrator
+
 ## Full list of currently exported data, in order
 - User's Display Name (the name that email clients show instead of the email address)
 - User's Primary Email Address
