@@ -61,14 +61,19 @@ foreach ($mailbox in $mailboxes) {
         $mailbox.ForwardingAddress
     }
 
-    # Output the forwarding address for debugging
-    Write-Host "Mailbox: $($mailbox.UserPrincipalName), ForwardingTo: $forwardingTo"
+    # Filter and format aliases
+    $aliases = $mailbox.EmailAddresses | Where-Object {
+        $_ -notmatch '^SPO:' -and $_ -notmatch [regex]::Escape($mailbox.PrimarySmtpAddress) -and $_ -notmatch 'onmicrosoft\.com'
+    } | ForEach-Object { $_ -replace 'smtp:', '' }
+
+    # Output the forwarding address and aliases for debugging
+    Write-Host "Mailbox: $($mailbox.UserPrincipalName), ForwardingTo: $forwardingTo, Aliases: $($aliases -join ', ')"
 
     # Add the mailbox, license, MFA status, and forwarding information to the results
     $results += New-Object PSObject -Property @{
         "Display Name" = $mailbox.DisplayName
         "Primary Email Address" = $mailbox.PrimarySmtpAddress
-        Licenses = (($user.Licenses.AccountSkuId -join ", ").Replace("KIS:", "").Replace("reseller-account:", "").Replace("PhilSmithAutomotiveGroup:", "").Replace("FLOW_FREE, ", "").Replace("O365_BUSINESS_ESSENTIALS", "Microsoft 365 Business Basic").Replace("O365_BUSINESS_PREMIUM", "Microsoft 365 Business Standard").Replace("ENTERPRISEPACK", "Office 365 E3").Replace(", FLOW_FREE", ""))
+        Licenses = (($user.Licenses.AccountSkuId -join ", ").Replace("KIS:", "").Replace("reseller-account:", "").Replace("PhilSmithAutomotiveGroup:", "").Replace(", FLOW_FREE", "").Replace("O365_BUSINESS_ESSENTIALS", "Microsoft 365 Business Basic").Replace("O365_BUSINESS_PREMIUM", "Microsoft 365 Business Standard").Replace("ENTERPRISEPACK", "Office 365 E3"))
         "MFA Status" = $mfaStatus
         RecipientTypeDetails = $mailbox.RecipientTypeDetails
         "Account Creation Date" = $mailbox.WhenMailboxCreated
@@ -78,12 +83,50 @@ foreach ($mailbox in $mailboxes) {
     }
 }
 
+# Get the list of groups and distribution lists
+$groups = Get-DistributionGroup -ResultSize Unlimited | Select-Object DisplayName, PrimarySmtpAddress, ManagedBy
+
+# Get the list of Microsoft 365 groups and Teams
+$unifiedGroups = Get-UnifiedGroup -ResultSize Unlimited | Select-Object DisplayName, PrimarySmtpAddress, ManagedBy
+
+# Create an array to hold the group results
+$groupResults = @()
+
+# Loop through each group and format the results
+foreach ($group in $groups) {
+    # Get the members of the group
+    $members = Get-DistributionGroupMember -Identity $group.PrimarySmtpAddress | Select-Object -ExpandProperty PrimarySmtpAddress
+
+    $groupResults += New-Object PSObject -Property @{
+        "Group Name" = $group.DisplayName
+        "Primary Email Address" = $group.PrimarySmtpAddress
+        "Managed By" = ($group.ManagedBy -join ", ")
+        "Members" = ($members -join ", ")
+    }
+}
+
+# Loop through each unified group and format the results
+foreach ($group in $unifiedGroups) {
+    # Get the members of the group
+    $members = Get-UnifiedGroupLinks -Identity $group.PrimarySmtpAddress -LinkType Members | Select-Object -ExpandProperty PrimarySmtpAddress
+
+    $groupResults += New-Object PSObject -Property @{
+        "Group Name" = $group.DisplayName
+        "Primary Email Address" = $group.PrimarySmtpAddress
+        "Managed By" = ($group.ManagedBy -join ", ")
+        "Members" = ($members -join ", ")
+    }
+}
+
 # Get the current date and time
 $currentDateTime = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 
-# Export the results to an XLSX file with auto-sized columns, top row frozen, and filtering enabled
+# Export the mailbox results to the first sheet
 echo "Exporting users_$currentDateTime.xlsx"
-$results | Select-Object "Display Name", "Primary Email Address", Licenses, "Forwarding to", "Keep mail if forwarding?", RecipientTypeDetails, Aliases, "MFA Status", "Account Creation Date" | Export-Excel -Path "users_$currentDateTime.xlsx" -AutoSize -FreezeTopRow -AutoFilter
+$results | Select-Object "Display Name", "Primary Email Address", Licenses, "Forwarding to", "Keep mail if forwarding?", RecipientTypeDetails, Aliases, "MFA Status", "Account Creation Date" | Export-Excel -Path "users_$currentDateTime.xlsx" -WorkSheetname "Mailboxes" -AutoSize -FreezeTopRow -AutoFilter
+
+# Export the group results to the second sheet
+$groupResults | Select-Object "Group Name", "Primary Email Address", "Managed By", "Members" | Export-Excel -Path "users_$currentDateTime.xlsx" -WorkSheetname "Groups" -AutoSize -FreezeTopRow -AutoFilter -Append
 
 # Disconnect from Exchange Online
 echo "Disconnecting from Microsoft 365 for ExchangeOnlineManagement PowerShell Module"
