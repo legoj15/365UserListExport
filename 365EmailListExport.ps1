@@ -15,19 +15,26 @@ Import-Module MSOnline
 echo "Importing ImportExcel PowerShell Module"
 Import-Module ImportExcel
 
-# Store your username and app password (hackers please look away)
-#$username = "your-username"
-#$password = ConvertTo-SecureString "your-app-password" -AsPlainText -Force
-#$credential = New-Object System.Management.Automation.PSCredential($username, $password)
-
 # Connect to Exchange Online
-Connect-ExchangeOnline #-Credential $credential
+Connect-ExchangeOnline
 
 # Connect to Azure AD
-Connect-MsolService #-Credential $credential
+Connect-MsolService
 
 # Get the list of mailboxes excluding DiscoveryMailbox
 $mailboxes = Get-Mailbox -ResultSize Unlimited | Where-Object {$_.RecipientTypeDetails -ne "DiscoveryMailbox"}
+
+# Create a hashtable to store GUID to UserPrincipalName mapping
+$guidToUserPrincipalName = @{}
+
+# Populate the hashtable with GUID and UserPrincipalName
+foreach ($mailbox in $mailboxes) {
+    $guidToUserPrincipalName[$mailbox.Name.ToString()] = $mailbox.UserPrincipalName
+}
+
+# Output the hashtable for debugging
+Write-Host "GUID to UserPrincipalName mapping:"
+$guidToUserPrincipalName.GetEnumerator() | ForEach-Object { Write-Host "$($_.Key) : $($_.Value)" }
 
 # Create an empty array to hold the results
 $results = @()
@@ -40,15 +47,32 @@ foreach ($mailbox in $mailboxes) {
     # Check MFA status
     $mfaStatus = if ($user.StrongAuthenticationMethods -ne $null) {"Enabled"} else {"Disabled"}
 
+    # Determine the forwarding address
+    $forwardingTo = if ($mailbox.ForwardingSmtpAddress -ne $null -and $mailbox.ForwardingSmtpAddress -ne "") {
+        $mailbox.ForwardingSmtpAddress -replace "smtp:", ""
+    } elseif ($mailbox.ForwardingAddress -ne $null -and $mailbox.ForwardingAddress -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') {
+        if ($guidToUserPrincipalName.ContainsKey($mailbox.ForwardingAddress)) {
+            $guidToUserPrincipalName[$mailbox.ForwardingAddress]
+        } else {
+            Write-Host "GUID not found in hashtable: $($mailbox.ForwardingAddress)"
+            $mailbox.ForwardingAddress
+        }
+    } else {
+        $mailbox.ForwardingAddress
+    }
+
+    # Output the forwarding address for debugging
+    Write-Host "Mailbox: $($mailbox.UserPrincipalName), ForwardingTo: $forwardingTo"
+
     # Add the mailbox, license, MFA status, and forwarding information to the results
     $results += New-Object PSObject -Property @{
         "Display Name" = $mailbox.DisplayName
         "Primary Email Address" = $mailbox.PrimarySmtpAddress
-        Licenses = (($user.Licenses.AccountSkuId -join ", ").Replace("reseller-account:", "").Replace("FLOW_FREE, ", "").Replace("O365_BUSINESS_ESSENTIALS", "Microsoft 365 Business Basic").Replace("O365_BUSINESS_PREMIUM", "Microsoft 365 Business Standard").Replace("ENTERPRISEPACK", "Office 365 E3").Replace(", FLOW_FREE", ""))
+        Licenses = (($user.Licenses.AccountSkuId -join ", ").Replace("KIS:", "").Replace("reseller-account:", "").Replace("PhilSmithAutomotiveGroup:", "").Replace("FLOW_FREE, ", "").Replace("O365_BUSINESS_ESSENTIALS", "Microsoft 365 Business Basic").Replace("O365_BUSINESS_PREMIUM", "Microsoft 365 Business Standard").Replace("ENTERPRISEPACK", "Office 365 E3").Replace(", FLOW_FREE", ""))
         "MFA Status" = $mfaStatus
         RecipientTypeDetails = $mailbox.RecipientTypeDetails
         "Account Creation Date" = $mailbox.WhenMailboxCreated
-        "Forwarding to" = ($mailbox.ForwardingSmtpAddress -replace "smtp:", "")
+        "Forwarding to" = $forwardingTo
         "Keep mail if forwarding?" = $mailbox.DeliverToMailboxAndForward
         Aliases = ($aliases -join ", ")
     }
@@ -57,9 +81,9 @@ foreach ($mailbox in $mailboxes) {
 # Get the current date and time
 $currentDateTime = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 
-# Export the results to an XLSX file with auto-sized columns
+# Export the results to an XLSX file with auto-sized columns, top row frozen, and filtering enabled
 echo "Exporting users_$currentDateTime.xlsx"
-$results | Select-Object "Display Name", "Primary Email Address", Licenses, "Forwarding to", "Keep mail if forwarding?", RecipientTypeDetails, Aliases, "MFA Status", "Account Creation Date" | Export-Excel -Path "users_$currentDateTime.xlsx" -AutoSize
+$results | Select-Object "Display Name", "Primary Email Address", Licenses, "Forwarding to", "Keep mail if forwarding?", RecipientTypeDetails, Aliases, "MFA Status", "Account Creation Date" | Export-Excel -Path "users_$currentDateTime.xlsx" -AutoSize -FreezeTopRow -AutoFilter
 
 # Disconnect from Exchange Online
 echo "Disconnecting from Microsoft 365 for ExchangeOnlineManagement PowerShell Module"
