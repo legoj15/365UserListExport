@@ -10,8 +10,18 @@ def is_admin():
         return ctypes.windll.shell32.IsUserAnAdmin() != 0
 
 def run_powershell_script(script_path):
-    # Set the execution policy scope for the current process to RemoteSigned and run the PowerShell script
-    subprocess.run(["powershell", "-Command", "Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned;" + script_path], check=True)
+    # Unset PSModulePath environment variable
+    env = os.environ.copy()
+    env.pop('PSModulePath', None)
+    
+    # Get the absolute path of the PowerShell script
+    abs_script_path = os.path.abspath(script_path)
+    
+    # Import the Microsoft.PowerShell.Security module and set the execution policy
+    command = f"Import-Module Microsoft.PowerShell.Security; Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned; & '{abs_script_path}'"
+    
+    # Run the PowerShell command
+    subprocess.run(["powershell", "-Command", command], check=True, env=env)
 
 if __name__ == "__main__":
     if is_admin():

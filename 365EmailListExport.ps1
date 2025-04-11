@@ -1,5 +1,5 @@
 # Check if the required modules are installed
-$requiredModules = 'ExchangeOnlineManagement', 'MSOnline', 'ImportExcel'
+$requiredModules = 'ExchangeOnlineManagement', 'Microsoft.Graph', 'ImportExcel'
 foreach ($module in $requiredModules) {
     if (-not (Get-Module -ListAvailable -Name $module)) {
         Write-Host "$module module is not installed. Installing now..."
@@ -10,19 +10,19 @@ foreach ($module in $requiredModules) {
 # Import the required modules
 echo "Importing ExchangeOnlineManagement PowerShell Module"
 Import-Module ExchangeOnlineManagement
-echo "Importing Microsoft Online PowerShell Module"
-Import-Module MSOnline
+echo "Importing Microsoft Graph PowerShell Module"
+Import-Module Microsoft.Graph
 echo "Importing ImportExcel PowerShell Module"
 Import-Module ImportExcel
 
 # Connect to Exchange Online
 Connect-ExchangeOnline
 
-# Connect to Azure AD
-Connect-MsolService
+# Connect to Microsoft Graph
+Connect-MgGraph -Scopes "User.Read.All", "Group.Read.All"
 
 # Get the tenant's name
-$tenantName = (Get-MsolCompanyInformation).DisplayName
+$tenantName = (Get-MgOrganization).DisplayName
 
 # Get the list of mailboxes excluding DiscoveryMailbox
 $mailboxes = Get-Mailbox -ResultSize Unlimited | Where-Object {$_.RecipientTypeDetails -ne "DiscoveryMailbox"}
@@ -45,10 +45,11 @@ $results = @()
 # Loop through each mailbox
 foreach ($mailbox in $mailboxes) {
     # Get the user and their licenses
-    $user = Get-MsolUser -UserPrincipalName $mailbox.UserPrincipalName
+    $user = Get-MgUser -UserId $mailbox.UserPrincipalName
+    $userLicenses = Get-MgUserLicenseDetail -UserId $mailbox.UserPrincipalName
 
     # Check MFA status
-    $mfaStatus = if ($user.StrongAuthenticationMethods -ne $null) {"Enabled"} else {"Disabled"}
+    #$mfaStatus = if ($user.StrongAuthenticationMethods -ne $null) {"Enabled"} else {"Disabled"}
 
     # Determine the forwarding address
     $forwardingTo = if ($mailbox.ForwardingSmtpAddress -ne $null -and $mailbox.ForwardingSmtpAddress -ne "") {
@@ -69,15 +70,18 @@ foreach ($mailbox in $mailboxes) {
         $_ -notmatch '^SPO:' -and $_ -notmatch [regex]::Escape($mailbox.PrimarySmtpAddress) -and $_ -notmatch 'onmicrosoft\.com'
     } | ForEach-Object { $_ -replace 'smtp:', '' }
 
+    # Format licenses
+    $licenses = $userLicenses.SkuPartNumber -join ", "
+
     # Output the forwarding address and aliases for debugging
-    Write-Host "Mailbox: $($mailbox.UserPrincipalName), ForwardingTo: $forwardingTo, Aliases: $($aliases -join ', ')"
+    Write-Host "Mailbox: $($mailbox.UserPrincipalName), ForwardingTo: $forwardingTo, Aliases: $($aliases -join ', '), Licenses: $licenses"
 
     # Add the mailbox, license, MFA status, and forwarding information to the results
     $results += New-Object PSObject -Property @{
         "Display Name" = $mailbox.DisplayName
         "Primary Email Address" = $mailbox.PrimarySmtpAddress
-        Licenses = (($user.Licenses.AccountSkuId -join ", ").Replace("KIS:", "").Replace("reseller-account:", "").Replace("PhilSmithAutomotiveGroup:", "").Replace(", FLOW_FREE", "").Replace("O365_BUSINESS_ESSENTIALS", "Microsoft 365 Business Basic").Replace("O365_BUSINESS_PREMIUM", "Microsoft 365 Business Standard").Replace("ENTERPRISEPACK", "Office 365 E3").Replace("JoeyAccardiAuto:", "").Replace("DEVELOPERPACK", "Office 365 E3 Developer").Replace("AAD_PREMIUM_P2", "Microsoft Entra ID P2").Replace("FLOW_FREE, ", "").Replace("EXCHANGEENTERPRISE", "Exchange Online (Plan 2)").Replace("RIGHTSMANAGEMENT_ADHOC", "Rights Management Adhoc"))
-        "MFA Status" = $mfaStatus
+        Licenses = (($licenses).Replace("O365_BUSINESS_PREMIUM", "Microsoft 365 Business Standard").Replace("FLOW_FREE", "Microsoft Power Automate Free").Replace("ENTERPRISEPACK","Office 365 E3").Replace("SPE_E3", "Microsoft 365 E3").Replace("POWER_BI_STANDARD",  "Microsoft Fabric (Free)").Replace("O365_BUSINESS_ESSENTIALS","Microsoft 365 Business Basic").Replace("EXCHANGEENTERPRISE", "Exchange Online (Plan 2)").Replace("RIGHTSMANAGEMENT_ADHOC", "Rights Management Adhoc").Replace("AAD_PREMIUM_P2", "Microsoft Entra ID P2").Replace("INTUNE_A", "Intune"))
+        #"MFA Status" = $mfaStatus
         RecipientTypeDetails = $mailbox.RecipientTypeDetails
         "Account Creation Date" = $mailbox.WhenMailboxCreated
         "Forwarding to" = $forwardingTo
@@ -150,7 +154,7 @@ $currentDateTime = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 
 # Export the mailbox results to the first sheet
 echo "Exporting users&groups_$currentDateTime.xlsx"
-$results | Select-Object "Display Name", "Primary Email Address", Licenses, "Forwarding to", "Keep mail if forwarding?", RecipientTypeDetails, Aliases, "MFA Status", "Account Creation Date" | Export-Excel -Path "users&groups_$currentDateTime.xlsx" -WorkSheetname "Mailboxes" -AutoSize -FreezeTopRow -AutoFilter
+$results | Select-Object "Display Name", "Primary Email Address", Licenses, "Forwarding to", "Keep mail if forwarding?", RecipientTypeDetails, Aliases, "Account Creation Date" | Export-Excel -Path "users&groups_$currentDateTime.xlsx" -WorkSheetname "Mailboxes" -AutoSize -FreezeTopRow -AutoFilter
 
 # Export the group results to the second sheet
 $groupResults | Select-Object "Group Name", "Primary Email Address", "Managed By", "Members" | Export-Excel -Path "users&groups_$currentDateTime.xlsx" -WorkSheetname "Groups" -AutoSize -FreezeTopRow -AutoFilter -Append
@@ -158,3 +162,5 @@ $groupResults | Select-Object "Group Name", "Primary Email Address", "Managed By
 # Disconnect from Exchange Online
 echo "Disconnecting from Microsoft 365 for ExchangeOnlineManagement PowerShell Module"
 Disconnect-ExchangeOnline -Confirm:$false
+echo "Disconnecting from Microsoft Graph PowerShell Module"
+Disconnect-MgGraph
